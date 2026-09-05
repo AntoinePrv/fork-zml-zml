@@ -16,6 +16,7 @@ fn dequantThread(
     allocator: std.mem.Allocator,
     io: std.Io,
     id: usize,
+    method: sfdquant.Method,
 ) !void {
     var tmp = std.heap.ArenaAllocator.init(allocator);
     defer tmp.deinit();
@@ -40,7 +41,13 @@ fn dequantThread(
             ,
                 .{ id, tensor.name, tensor.shape, nvfp4t.?.nelements() },
             );
-            const buff32 = try sfdquant.tensorDequantF32(nvfp4t.?, allocator, tmp.allocator(), io);
+            const buff32 = try sfdquant.tensorDequantF32(
+                nvfp4t.?,
+                allocator,
+                tmp.allocator(),
+                io,
+                method,
+            );
 
             // Fake usage of the data
             std.mem.doNotOptimizeAway(&buff32);
@@ -53,8 +60,17 @@ fn dequantThread(
 }
 
 // Notes:
-// We could improve on the reader to avoid full allocation
-// We did not account for endianness
+//
+// - The Reader/Writer design may addssome overhead which seems to mitigate SIMD improvements.
+//   Investigate overlapping IO and compute.
+// - TODO: investigate a SIMD lookup algorithm:
+//     Shuffle dyn would be good to make lookup into fp32 values (since there are few).
+//     vqtbl1q_u8 etc on Neon and vqtbl4q_u8 for multi register table
+//     Also BMI2 and VMBI
+//     Though Zig @shuffle does not support dynamic masks. An inline for loop my be detected
+//     by the compiler.
+//     https://github.com/ziglang/zig/issues/24810
+// - We did not account for endianness
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena;
     const allocator = init.gpa;
@@ -66,7 +82,8 @@ pub fn main(init: std.process.Init) !void {
     // Parse program args
     const process_args = try init.minimal.args.toSlice(arena.allocator());
     const model_path = process_args[1];
-    const nthreads = try std.fmt.parseInt(usize, process_args[2], 10);
+    const method = try sfdquant.Method.parse(process_args[2]);
+    const nthreads = try std.fmt.parseInt(usize, process_args[3], 10);
 
     std.debug.print("Reading, {s}\n", .{model_path});
 
@@ -81,17 +98,20 @@ pub fn main(init: std.process.Init) !void {
     // Launching threads with their
     var iter = registry.iterator();
     var lock = std.Io.RwLock.init;
-    std.debug.print("Launching dequantization on {s}\n", .{nthreads});
-    for (0..nthreads - 1) |_| {
+    std.debug.print(
+        "Launching dequantization with {s} on {d} threads\n",
+        .{ @tagName(method), nthreads },
+    );
+    for (0..nthreads - 1) |id| {
         const t = try std.Thread.spawn(
             .{},
             dequantThread,
-            .{ &registry, &iter, &lock, allocator, io },
+            .{ &registry, &iter, &lock, allocator, io, id + 1, method },
         );
         try threads.append(allocator, t);
     }
     // Main thread pulls some work too
-    const result = dequantThread(&registry, &iter, &lock, allocator, io);
+    const result = dequantThread(&registry, &iter, &lock, allocator, io, 0, method);
 
     // Check all errors
     try result;

@@ -78,11 +78,27 @@ pub const NvFp4SafeTensor = struct {
     }
 };
 
+pub const Method = enum {
+    scalar_lookup,
+    simd_shift,
+
+    pub fn parse(str: []const u8) !Method {
+        if (std.ascii.eqlIgnoreCase(str, "scalar-lookup")) {
+            return .scalar_lookup;
+        }
+        if (std.ascii.eqlIgnoreCase(str, "simd-shift")) {
+            return .simd_shift;
+        }
+        return error.ParseError;
+    }
+};
+
 pub fn tensorDequantF32(
     tensor: NvFp4SafeTensor,
     allocator: std.mem.Allocator,
     tmp_alloc: std.mem.Allocator,
     io: std.Io,
+    method: Method,
 ) ![]f32 {
     const alignm = comptime std.mem.Alignment.fromByteUnits(DEFAULT_ALIGN);
 
@@ -110,13 +126,26 @@ pub fn tensorDequantF32(
     const buf = try tmp_alloc.alignedAlloc(u8, alignm, (1 + 8 + 64) * 1024);
     defer tmp_alloc.free(buf);
 
-    try dquant.streamDequantF32(
-        &fp4block_reader.interface,
-        &block_scale_reader.interface,
-        tensor_scale,
-        &writer,
-        buf,
-    );
+    // TODO switch
+    if (method == Method.scalar_lookup) {
+        try dquant.streamDequantF32(
+            &fp4block_reader.interface,
+            &block_scale_reader.interface,
+            tensor_scale,
+            &writer,
+            buf,
+            dquant.dequantF32Scalar,
+        );
+    } else if (method == Method.simd_shift) {
+        try dquant.streamDequantF32(
+            &fp4block_reader.interface,
+            &block_scale_reader.interface,
+            tensor_scale,
+            &writer,
+            buf,
+            dquant.dequantF32Simd,
+        );
+    }
 
     return out;
 }

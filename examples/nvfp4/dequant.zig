@@ -188,6 +188,7 @@ pub fn streamDequantF32(
     tensor_scale: f32,
     out_writer: *std.Io.Writer,
     buffer: []align(DEFAULT_ALIGN) u8,
+    dequant_slice: anytype,
 ) !void {
     const alignm = comptime std.mem.Alignment.fromByteUnits(DEFAULT_ALIGN);
     const block_size = comptime NvFp4Buffers.BLOCK_SIZE;
@@ -224,7 +225,7 @@ pub fn streamDequantF32(
             .block_scale = fp8.ptr,
             .tensor_scale = tensor_scale,
         };
-        dequantF32Simd(input, @ptrCast(out));
+        dequant_slice(input, @ptrCast(out));
         try out_writer.writeAll(out);
     }
 }
