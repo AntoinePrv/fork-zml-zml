@@ -159,7 +159,9 @@ pub fn dequantF32Simd(input: NvFp4Buffers, output: []align(DEFAULT_ALIGN) f32) v
     const tensor_scale: VectorF32 = @splat(input.tensor_scale);
 
     for (0..input.nBlocks()) |blk| {
-        // Hypothesis: we do not dequant the F8E4M3 with SIMD
+        // Hypothesis: we do not dequant the F8E4M3 with SIMD because the
+        // SIMD registers are plenty busy with the f4E2M1 while the regular
+        // registers are fgree.
         const block_scale_packed: Float8E4M3 = @bitCast(input.block_scale[blk]);
         const block_scale: VectorF32 = @splat(block_scale_packed.toF32());
 

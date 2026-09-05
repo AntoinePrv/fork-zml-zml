@@ -3,7 +3,7 @@ load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_test")
 zig_binary(
     name = "nvfp4",
     main = "main.zig",
-    srcs = ["dequant.zig"],
+    srcs = ["dequant.zig", "safetensors.zig"],
     visibility = ["//visibility:public"],
     deps = [
         "//bazel",
@@ -14,7 +14,7 @@ zig_binary(
 zig_test(
     name = "test",
     main = "main.zig",
-    srcs = ["dequant.zig"],
+    srcs = ["dequant.zig", "safetensors.zig"],
     deps = [
         "//bazel",
         "//zml",
