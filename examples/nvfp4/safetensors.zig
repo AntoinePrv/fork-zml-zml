@@ -61,19 +61,19 @@ pub const NvFp4SafeTensor = struct {
         return null;
     }
 
-    fn fp4TensorByteSize(self: *const Self) usize {
+    pub fn fp4TensorByteSize(self: *const Self) usize {
         return self.fp4block16.byteSize();
     }
 
-    fn fp8ScaleTensorByteSize(self: *const Self) usize {
+    pub fn fp8ScaleTensorByteSize(self: *const Self) usize {
         return self.block_scale.byteSize();
     }
 
-    fn nelements(self: *const Self) usize {
+    pub fn nelements(self: *const Self) usize {
         return 2 * self.fp4TensorByteSize();
     }
 
-    fn dequantF32ByteSize(self: *const Self) usize {
+    pub fn dequantF32ByteSize(self: *const Self) usize {
         return @sizeOf(f32) * self.nelements();
     }
 };
@@ -81,6 +81,7 @@ pub const NvFp4SafeTensor = struct {
 pub fn tensorDequantF32(
     tensor: NvFp4SafeTensor,
     allocator: std.mem.Allocator,
+    tmp_alloc: std.mem.Allocator,
     io: std.Io,
 ) ![]f32 {
     const alignm = comptime std.mem.Alignment.fromByteUnits(DEFAULT_ALIGN);
@@ -106,8 +107,8 @@ pub fn tensorDequantF32(
     var writer = std.Io.Writer.fixed(std.mem.sliceAsBytes(out));
 
     // Dequant working buffer
-    const buf = try allocator.alignedAlloc(u8, alignm, (1 + 8 + 64) * 1024);
-    defer allocator.free(buf);
+    const buf = try tmp_alloc.alignedAlloc(u8, alignm, (1 + 8 + 64) * 1024);
+    defer tmp_alloc.free(buf);
 
     try dquant.streamDequantF32(
         &fp4block_reader.interface,

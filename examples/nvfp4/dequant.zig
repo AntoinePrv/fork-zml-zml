@@ -199,7 +199,6 @@ pub fn streamDequantF32(
     var fp4_buf = buffer[fp32_buf.len..][0 .. fp4_block_bytes * buf_block_count];
     var fp8_buf = buffer[fp32_buf.len + fp4_buf.len ..][0..buf_block_count];
 
-    var done: usize = 0;
     while (true) {
         const nbfp4 = try fp4block16_reader.readSliceShort(fp4_buf);
         const nbfp8 = try block_scale_reader.readSliceShort(fp8_buf);
@@ -226,10 +225,8 @@ pub fn streamDequantF32(
             .tensor_scale = tensor_scale,
         };
         dequantF32Simd(input, @ptrCast(out));
-        done += input.nelements;
         try out_writer.writeAll(out);
     }
-    std.debug.print("  Dequant {d} values\n", .{done});
 }
 
 fn nibble_swap(x: u8) u8 {
