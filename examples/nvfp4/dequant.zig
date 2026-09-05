@@ -182,6 +182,56 @@ pub fn dequantF32Simd(input: NvFp4Buffers, output: []align(DEFAULT_ALIGN) f32) v
     }
 }
 
+pub fn streamDequantF32(
+    fp4block16_reader: *std.Io.Reader,
+    block_scale_reader: *std.Io.Reader,
+    tensor_scale: f32,
+    out_writer: *std.Io.Writer,
+    buffer: []align(DEFAULT_ALIGN) u8,
+) !void {
+    const alignm = comptime std.mem.Alignment.fromByteUnits(DEFAULT_ALIGN);
+    const block_size = comptime NvFp4Buffers.BLOCK_SIZE;
+    const fp4_block_bytes = comptime block_size / 2;
+    // Number of fp4 + fp8 + fp32 blocks we can fit in the buffer
+    const buf_block_count = buffer.len / (1 + fp4_block_bytes + @sizeOf(f32) * block_size);
+    std.debug.assert(buf_block_count > 0);
+    var fp32_buf = buffer[0 .. @sizeOf(f32) * block_size * buf_block_count];
+    var fp4_buf = buffer[fp32_buf.len..][0 .. fp4_block_bytes * buf_block_count];
+    var fp8_buf = buffer[fp32_buf.len + fp4_buf.len ..][0..buf_block_count];
+
+    var done: usize = 0;
+    while (true) {
+        const nbfp4 = try fp4block16_reader.readSliceShort(fp4_buf);
+        const nbfp8 = try block_scale_reader.readSliceShort(fp8_buf);
+        if (nbfp4 != nbfp8 * fp4_block_bytes) {
+            @branchHint(.unlikely);
+            return error.InvalidTensorShapes;
+        }
+        if (nbfp4 == 0) {
+            break;
+        }
+
+        // Prepare input
+        const nelements = nbfp8 * block_size;
+        const fp4: []align(DEFAULT_ALIGN) u8 = @alignCast(fp4_buf[0..nbfp4]);
+        std.debug.assertAligned(fp4, alignm);
+        const fp8 = fp8_buf[0..nbfp8];
+        const out = fp32_buf[0 .. nelements * @sizeOf(f32)];
+        // We do not need to validate again
+        std.debug.assert(!std.meta.isError(NvFp4Buffers.validate(fp4, fp8, tensor_scale)));
+        const input = NvFp4Buffers{
+            .nelements = nelements,
+            .fp4block16 = fp4.ptr,
+            .block_scale = fp8.ptr,
+            .tensor_scale = tensor_scale,
+        };
+        dequantF32Simd(input, @ptrCast(out));
+        done += input.nelements;
+        try out_writer.writeAll(out);
+    }
+    std.debug.print("  Dequant {d} values\n", .{done});
+}
+
 fn nibble_swap(x: u8) u8 {
     return (x << 4) | (x >> 4);
 }

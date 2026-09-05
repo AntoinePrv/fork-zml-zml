@@ -8,7 +8,7 @@ const TensorRegistry = zml.safetensors.TensorRegistry;
 const DataType = zml.DataType;
 const DEFAULT_ALIGN = dquant.DEFAULT_ALIGN;
 
-const NvFp4SafeTensor = struct {
+pub const NvFp4SafeTensor = struct {
     const Self = @This();
 
     const BLOCK_SIZE = 16;
@@ -22,7 +22,7 @@ const NvFp4SafeTensor = struct {
     block_scale: SafeTensor,
     tensor_scale: SafeTensor,
 
-    fn make(
+    pub fn make(
         tensor: *const SafeTensor,
         registry: *const TensorRegistry,
         allocator: std.mem.Allocator,
@@ -61,20 +61,24 @@ const NvFp4SafeTensor = struct {
         return null;
     }
 
-    fn fp4BlockByteSize(self: *const Self) usize {
+    fn fp4TensorByteSize(self: *const Self) usize {
         return self.fp4block16.byteSize();
     }
 
-    fn blockScaleByteSize(self: *const Self) usize {
+    fn fp8ScaleTensorByteSize(self: *const Self) usize {
         return self.block_scale.byteSize();
     }
 
-    fn dequantByteSize(self: *const Self) usize {
-        return 2 * self.fp4BlockByteSize();
+    fn nelements(self: *const Self) usize {
+        return 2 * self.fp4TensorByteSize();
+    }
+
+    fn dequantF32ByteSize(self: *const Self) usize {
+        return @sizeOf(f32) * self.nelements();
     }
 };
 
-fn tensorDequantF32Scalar(
+pub fn tensorDequantF32(
     tensor: NvFp4SafeTensor,
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -82,34 +86,36 @@ fn tensorDequantF32Scalar(
     const alignm = comptime std.mem.Alignment.fromByteUnits(DEFAULT_ALIGN);
 
     // Allocate output before input since the latter can be freed
-    const out = try allocator.alignedAlloc(f32, alignm, tensor.dequantByteSize());
+    const out = try allocator.alignedAlloc(f32, alignm, tensor.nelements());
 
-    var buffer: [8 * 1024]u8 = undefined;
-
-    // Read fp4 weights
-    var fp4block_reader = try tensor.fp4block16.reader(io, &buffer, .{}); // TODO alignment?
+    // No need for buffer we read
+    // Reader for fp4 weights
+    var fp4block_reader = try tensor.fp4block16.reader(io, &.{}, .{});
     defer fp4block_reader.deinit();
-    const fp4block = try allocator.alignedAlloc(u8, alignm, tensor.fp4BlockByteSize());
-    try fp4block_reader.interface.readSliceAll(fp4block);
-    defer allocator.free(fp4block);
-
-    // Read fp8 scales
-    var bscale_reader = try tensor.block_scale.reader(io, &buffer, .{}); // TODO alignment?
-    defer bscale_reader.deinit();
-    const block_scale = try allocator.alignedAlloc(u8, alignm, tensor.blockScaleByteSize());
-    try bscale_reader.interface.readSliceAll(block_scale);
-    defer allocator.free(block_scale);
+    // Reader for fp8 scales
+    var block_scale_reader = try tensor.block_scale.reader(io, &.{}, .{});
+    defer block_scale_reader.deinit();
 
     // Read tensor scale
-    var tscale_reader = try tensor.tensor_scale.reader(io, &buffer, .{});
-    defer tscale_reader.deinit();
     var tensor_scale: f32 = undefined;
+    var tscale_reader = try tensor.tensor_scale.reader(io, std.mem.asBytes(&tensor_scale), .{});
+    defer tscale_reader.deinit();
     try tscale_reader.interface.readSliceAll(std.mem.asBytes(&tensor_scale));
 
-    // Dequant
-    const input = try dquant.NvFp4Buffers.validate(fp4block, block_scale, tensor_scale);
-    // dquant.dequantF32Scalar(input, out);
-    dquant.dequantF32Simd(input, out);
+    // Dequant output
+    var writer = std.Io.Writer.fixed(std.mem.sliceAsBytes(out));
+
+    // Dequant working buffer
+    const buf = try allocator.alignedAlloc(u8, alignm, (1 + 8 + 64) * 1024);
+    defer allocator.free(buf);
+
+    try dquant.streamDequantF32(
+        &fp4block_reader.interface,
+        &block_scale_reader.interface,
+        tensor_scale,
+        &writer,
+        buf,
+    );
+
     return out;
 }
-
